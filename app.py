@@ -4,6 +4,7 @@
 # and download a single Excel file (one sheet) with a header row.
 
 import io
+import re
 from datetime import datetime
 
 import pandas as pd
@@ -12,6 +13,18 @@ from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 
 from parse_logic import parse_pdf_bytes, HEADERS
+
+
+# ------------------------------
+# Helper: extract invoice ID (e.g., SY0050227)
+# ------------------------------
+def extract_invoice_id(filename: str):
+    """
+    Extracts invoice ID patterns like 'SY0050227' from filenames such as:
+    'invoice-SY0050227.pdf'
+    """
+    match = re.search(r"(SY\d+)", filename.upper())
+    return match.group(1) if match else filename   # fallback to full filename
 
 
 st.set_page_config(page_title="Invoice Processor – Freight A→Z", layout="wide")
@@ -36,29 +49,44 @@ if uploaded:
         for f in uploaded:
             try:
                 data = f.read()
-                row  = parse_pdf_bytes(data, filename=f.name)
+
+                # 🔥 Extract invoice ID before passing to parser
+                invoice_id = extract_invoice_id(f.name)
+
+                # Pass invoice_id instead of the full file name
+                row = parse_pdf_bytes(data, filename=invoice_id)
+
+                # Overwrite or ensure Filename field contains only the ID
+                row["Filename"] = invoice_id
+
                 rows.append(row)
 
                 # Build a friendly log line
                 log.append(
-                    f"✓ {row.get('Filename','')} | "
+                    f"✓ {invoice_id} | "
                     f"{row.get('Invoice_Date') or '—'} | "
                     f"{row.get('Currency') or '—'} | "
                     f"{row.get('Freight_Mode') or '—'} "
                     f"{('(' + str(row.get('Freight_Amount')) + ')') if row.get('Freight_Amount') is not None else ''}"
                 )
+
             except Exception as e:
+                # On error, still use extracted invoice ID
+                invoice_id = extract_invoice_id(f.name)
+
                 rows.append({
-                    "Timestamp": datetime.now(), "Filename": f.name,
+                    "Timestamp": datetime.now(),
+                    "Filename": invoice_id,
                     "Invoice_Date": None, "Currency": None, "Shipper": None,
                     "Weight_KG": None, "Volume_M3": None, "Chargeable_KG": None,
                     "Chargeable_CBM": None, "Packages": None, "Subtotal": None,
                     "Freight_Mode": None, "Freight_Amount": None
                 })
-                log.append(f"✗ {f.name} | error: {e}")
+                log.append(f"✗ {invoice_id} | error: {e}")
 
     # DataFrame with fixed column order
     df = pd.DataFrame(rows)
+
     # Ensure correct column order + any missed columns
     for col in HEADERS:
         if col not in df.columns:
@@ -80,7 +108,7 @@ if uploaded:
     for r in dataframe_to_rows(df, index=False, header=True):
         ws.append(r)
 
-    # Autosize columns (simple heuristic)
+    # Autosize columns
     for col in ws.columns:
         max_len = 0
         col_letter = col[0].column_letter
@@ -93,7 +121,7 @@ if uploaded:
                 pass
         ws.column_dimensions[col_letter].width = min(max_len + 2, 60)
 
-    # Save to bytes
+    # Save to memory
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -106,3 +134,4 @@ if uploaded:
     )
 else:
     st.info("Upload one or more **PDF** files to begin.")
+
