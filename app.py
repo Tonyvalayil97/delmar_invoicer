@@ -16,15 +16,20 @@ from parse_logic import parse_pdf_bytes, HEADERS
 
 
 # ------------------------------
-# Helper: extract invoice ID (e.g., SY0050227)
+# Helper: extract invoice ID (SY0050227, SY0051432A, etc.)
 # ------------------------------
 def extract_invoice_id(filename: str):
     """
-    Extracts invoice ID patterns like 'SY0050227' from filenames such as:
-    'invoice-SY0050227.pdf'
+    Extracts invoice IDs like:
+    - SY0050227
+    - SY0051432A  (letter must NOT be dropped)
+    
+    Works on filenames like:
+    - invoice-SY0051432A.pdf
+    - SY0050227.PDF
     """
-    match = re.search(r"(SY\d+)", filename.upper())
-    return match.group(1) if match else filename   # fallback to full filename
+    match = re.search(r"(SY\d+[A-Z]?)", filename.upper())
+    return match.group(1) if match else filename   # fallback to entire filename
 
 
 st.set_page_config(page_title="Invoice Processor – Freight A→Z", layout="wide")
@@ -50,18 +55,18 @@ if uploaded:
             try:
                 data = f.read()
 
-                # 🔥 Extract invoice ID before passing to parser
+                # 🔥 Extract clean invoice ID (supports ending letter)
                 invoice_id = extract_invoice_id(f.name)
 
-                # Pass invoice_id instead of the full file name
+                # Pass invoice_id instead of full filename
                 row = parse_pdf_bytes(data, filename=invoice_id)
 
-                # Overwrite or ensure Filename field contains only the ID
+                # Overwrite Filename field to ensure only clean ID is kept
                 row["Filename"] = invoice_id
 
                 rows.append(row)
 
-                # Build a friendly log line
+                # Logging
                 log.append(
                     f"✓ {invoice_id} | "
                     f"{row.get('Invoice_Date') or '—'} | "
@@ -71,7 +76,7 @@ if uploaded:
                 )
 
             except Exception as e:
-                # On error, still use extracted invoice ID
+                # use clean ID even on fail
                 invoice_id = extract_invoice_id(f.name)
 
                 rows.append({
@@ -84,10 +89,8 @@ if uploaded:
                 })
                 log.append(f"✗ {invoice_id} | error: {e}")
 
-    # DataFrame with fixed column order
+    # Build DataFrame and enforce column order
     df = pd.DataFrame(rows)
-
-    # Ensure correct column order + any missed columns
     for col in HEADERS:
         if col not in df.columns:
             df[col] = None
@@ -104,7 +107,6 @@ if uploaded:
     ws = wb.active
     ws.title = "Invoice_Summary"
 
-    # Write DataFrame (with header)
     for r in dataframe_to_rows(df, index=False, header=True):
         ws.append(r)
 
@@ -121,7 +123,7 @@ if uploaded:
                 pass
         ws.column_dimensions[col_letter].width = min(max_len + 2, 60)
 
-    # Save to memory
+    # Save Excel to memory buffer
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -132,6 +134,9 @@ if uploaded:
         file_name="Invoice_Summary.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
 else:
     st.info("Upload one or more **PDF** files to begin.")
+
+
 
